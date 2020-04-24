@@ -1,16 +1,15 @@
-from Time_Series import vel_and_disp
-from numpy import arange,where,mean,pi
-from scipy.integrate import cumtrapz
-from Response_Spectra import ResponseSpectra
-from PreProcess import butter_lowpass_filter
-from FAS import FourierAmplitude
-import matplotlib.pyplot as plt
+from numpy import arange,where,mean
+from Spectra import *
+from PreProcess import *
+from NumericalMethods import bisection
+
 class GMP:
-    def __init__(self,acceleration,dt):
+    def __init__(self,acceleration,velocity,displacement,dt):
         self.accelerations = acceleration
         self.dt = dt
         self.times = arange(0,dt*len(acceleration),dt)
-        self.velocities, self.displacements = vel_and_disp(acceleration,dt)
+        self.velocities = velocity
+        self.displacements = displacement
         self.g = 9.81
 
     def max_acceleration(self):
@@ -49,17 +48,18 @@ class GMP:
         return mean(self.displacements[1:] ** 2) ** 0.5
 
     def arias_intensity(self):
-        return (cumtrapz((self.accelerations*self.g) ** 2, dx=self.dt)*(0.5*pi/self.g))[-1]
+        return (cumtrapz((self.accelerations*self.g) ** 2, dx=self.dt)*(0.5*pi/self.g))
 
     def characteristic_intensity(self):
         return (self.a_rms()**1.5)*(self.times[-1]**0.5)
 
     def specific_energy_density(self):
-        return cumtrapz(self.velocities**2,dx=self.dt)[-1]
+        return cumtrapz(self.velocities**2,dx=self.dt)
 
     def housner_intensity(self):
-        T = arange(0.1,2.6,0.1)
-        psa,psv,psd = ResponseSpectra(self.accelerations,self.dt,T)
+        T = arange(0.1,2.51,0.01)
+        response_spectrum = ResponseSpectra(self.accelerations, self.dt, T)
+        psv = response_spectrum["Velocity"]
 
         return cumtrapz(psv,dx=0.01)[-1]
 
@@ -84,48 +84,65 @@ class GMP:
 
     def sustained_max_velocity(self):
         SMV = 0
-        for i in range(2, len(self.velocities)):
-            velocity = sorted(abs(self.velocities), reverse=True)[i]
-            index = where(self.velocities == velocity)[0][0]
-            try:
-                left = self.velocities[(index - 20):index]
-            except:
-                left = self.velocities[:index]
+        if all(sorted(abs(self.velocities)) != self.velocities):
+            for i in range(2, len(self.velocities)):
+                velocity = sorted(abs(self.velocities), reverse=True)[i]
+                index = where(self.velocities == velocity)[0][0]
+                try:
+                    left = self.velocities[(index - 20):index]
+                except:
+                    left = self.velocities[:index]
 
-            try:
-                right = self.velocities[index + 1:(index + 21)]
-            except:
-                right = self.velocities[index + 1:]
-            if len(where(velocity > left)[0]) == 20 and len(where(velocity > right)[0]) == 20:
-                SMV = velocity
-                break
+                try:
+                    right = self.velocities[index + 1:(index + 21)]
+                except:
+                    right = self.velocities[index + 1:]
+
+                if len(where(velocity > left)[0]) == 20 and len(where(velocity > right)[0]) == 20:
+                    SMV = velocity
+                    break
         return SMV
 
     def effective_design_acceleration(self):
-        filtered_data = butter_lowpass_filter(self.accelerations,9,self.dt,order=1)
+        filtered_data = Filtering(self.accelerations,self.dt,"Butterworth","low",9,15,1)
         return max(abs(filtered_data))
 
-    def A95(self):
-        #Tekrar bak
-        Ia = self.arias_intensity()
-        for n in range(int(len(self.accelerations)*0.9),len(self.accelerations)):
-            Ia_new = (cumtrapz((self.accelerations[:n]*self.g) ** 2, dx=self.dt)*(0.5*pi/self.g))[-1]
-            rate = 100*Ia_new/Ia
-            if rate >94.99:
-                A95 = self.accelerations[n]
-                break
+    def cumulative_absolute_velocity(self):
+        return cumtrapz(abs(self.accelerations)*self.g, dx=self.dt)[-1]*100
 
-        return A95
+    def acceleration_spectrum_intensity(self):
+        T = arange(0.1, 0.51, 0.01)
+        response_spectrum = ResponseSpectra(self.accelerations, self.dt, T)
+        psa = response_spectrum["Acceleration"]
+
+        return cumtrapz(psa, dx=0.01)[-1]
+
+    def velocity_spectrum_intensity(self):
+        T = arange(0.1, 2.51, 0.01)
+        response_spectrum = ResponseSpectra(self.accelerations, self.dt, T)
+        psv = response_spectrum["Velocity"]
+
+        return cumtrapz(psv, dx=0.01)[-1]
+
+    def A95(self):
+        def f(accelerations,a95,dt,Ia):
+            diff = accelerations**2 - a95**2
+            positives = [0 if i<0 else i for i in diff]
+            Ia_new = cumtrapz(positives,dx=dt)[-1]
+
+            return Ia_new/Ia - 0.05
+        a95 = bisection(0,max(self.accelerations),f,self.accelerations,self.dt,cumtrapz(self.accelerations,dx=self.dt)[-1])
+        return a95
 
     def predomimant_period(self):
         T = arange(0.02,4.02,0.02)
-        psa,psv,psd = ResponseSpectra(self.accelerations,self.dt,T)
+        response_spectrum = ResponseSpectra(self.accelerations, self.dt, T)
+        psa = response_spectrum["Acceleration"]
 
         return T[where(psa==max(psa))[0][0]]
 
     def mean_period(self):
-        #Tekrar bak
-        fa,f = FourierAmplitude(self.accelerations,self.dt)
+        f,fa,pa = FourierAmplitude(self.accelerations,self.dt)
         f_list = f[(f>=0.25) & (f<=20)]
         A = 0
         B = 0
@@ -135,3 +152,33 @@ class GMP:
             B += Ci**2
 
         return A/B
+
+    def uniform_duration(self,A0 = "Default"):
+        if A0 == "Default":
+            A0 = max(abs(self.accelerations))*0.05
+
+        higher = len(where(self.accelerations**2 > A0**2)[0]) - 1
+        return higher*self.dt
+
+    def bracketed_duration(self,A0 = "Default"):
+        if A0 == "Default":
+            A0 = max(abs(self.accelerations))*0.05
+
+        t1 = self.times[where(self.accelerations**2 >= A0**2)[0][0]]
+        t2 = self.times[where(self.accelerations**2 >= A0**2)[0][-1]]
+        return t2 - t1 + self.dt
+
+    def significant_duration(self,p1 = 5, p2 = 95):
+        Ia = self.arias_intensity()
+        normalized_Ia = 100*Ia/max(Ia)
+        t1 = self.times[where(normalized_Ia <= p1)[0][-1]]
+        t2 = self.times[where(normalized_Ia >= p2)[0][0]]
+
+        return t2 - t1 - self.dt
+
+    def effective_duration(self,Ia1, Ia2):
+        Ia = self.arias_intensity()
+        t1 = self.times[where(Ia <= Ia1)[0][-1]]
+        t2 = self.times[where(Ia >= Ia2)[0][0]]
+
+        return t2 - t1 - self.dt
