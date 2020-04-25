@@ -1,32 +1,33 @@
-from numpy import arange,where,mean
+from numpy import arange,where,mean,isclose
 from Spectra import *
 from PreProcess import *
-from NumericalMethods import bisection
 
 class GMP:
-    def __init__(self,acceleration,velocity,displacement,dt):
+    def __init__(self,acceleration,velocity,displacement,dt,response_spectra,period):
         self.accelerations = acceleration
         self.dt = dt
         self.times = arange(0,dt*len(acceleration),dt)
         self.velocities = velocity
         self.displacements = displacement
         self.g = 9.81
+        self.response_spectra = response_spectra
+        self.period = period
 
     def max_acceleration(self):
         pga = max(abs(self.accelerations))
-        pga_time = self.times[where(self.accelerations == pga )[0][0]]
+        pga_time = self.times[where(abs(self.accelerations) == pga )[0][0]]
 
         return round(pga,5),round(pga_time,5)
 
     def max_velocity(self):
         pgv = max(abs(self.velocities))
-        pgv_time = self.times[where(self.velocities == pgv )[0][0]]
+        pgv_time = self.times[where(abs(self.velocities) == pgv )[0][0]]
 
         return round(pgv,5),round(pgv_time,5)
 
     def max_displacement(self):
         pgd = max(abs(self.displacements))
-        pgd_time = self.times[where(self.displacements == pgd )[0][0]]
+        pgd_time = self.times[where(abs(self.displacements) == pgd )[0][0]]
 
         return round(pgd,5),round(pgd_time,5)
 
@@ -57,29 +58,34 @@ class GMP:
         return cumtrapz(self.velocities**2,dx=self.dt)
 
     def housner_intensity(self):
-        T = arange(0.1,2.51,0.01)
-        response_spectrum = ResponseSpectra(self.accelerations, self.dt, T)
-        psv = response_spectrum["Velocity"]
-
-        return cumtrapz(psv,dx=0.01)[-1]
+        if self.period[-1] >= 2.5:
+            dx = self.period[2] - self.period[1]
+            index = isclose(self.period,2.5).nonzero()[0][0]+1
+            psv = self.response_spectra["Velocity"][:index]
+        else:
+            response_spectra = ResponseSpectra(self.accelerations,self.dt,arange(0.1,2.51,0.1))
+            psv = response_spectra["Velocity"]
+            dx = 0.1
+        return cumtrapz(psv,dx=dx)[-1]
 
     def sustained_max_acceleration(self):
         SMA = 0
-        for i in range(2,len(self.accelerations)):
-            acc =  sorted(abs(self.accelerations),reverse=True)[i]
-            index = where(self.accelerations == acc)[0][0]
-            try:
-                left = self.accelerations[(index-20):index]
-            except:
-                left = self.accelerations[:index]
+        if all(sorted(abs(self.velocities)) != self.velocities):
+            for i in range(2,len(self.accelerations)):
+                acc =  sorted(abs(self.accelerations),reverse=True)[i]
+                index = where(abs(self.accelerations) == acc)[0][0]
+                try:
+                    left = self.accelerations[(index-20):index]
+                except:
+                    left = self.accelerations[:index]
 
-            try:
-                right = self.accelerations[index+1:(index+21)]
-            except:
-                right = self.accelerations[index+1:]
-            if len(where(acc > left)[0]) == 20 and len(where(acc > right)[0]) == 20:
-                SMA = acc
-                break
+                try:
+                    right = self.accelerations[index+1:(index+21)]
+                except:
+                    right = self.accelerations[index+1:]
+                if len(where(acc > left)[0]) == 20 and len(where(acc > right)[0]) == 20:
+                    SMA = acc
+                    break
         return SMA
 
     def sustained_max_velocity(self):
@@ -87,7 +93,7 @@ class GMP:
         if all(sorted(abs(self.velocities)) != self.velocities):
             for i in range(2, len(self.velocities)):
                 velocity = sorted(abs(self.velocities), reverse=True)[i]
-                index = where(self.velocities == velocity)[0][0]
+                index = where(abs(self.velocities) == velocity)[0][0]
                 try:
                     left = self.velocities[(index - 20):index]
                 except:
@@ -111,35 +117,60 @@ class GMP:
         return cumtrapz(abs(self.accelerations)*self.g, dx=self.dt)[-1]*100
 
     def acceleration_spectrum_intensity(self):
-        T = arange(0.1, 0.51, 0.01)
-        response_spectrum = ResponseSpectra(self.accelerations, self.dt, T)
-        psa = response_spectrum["Acceleration"]
+        if self.period[-1]<0.5:
+            dx = 0.1
+            T = arange(0.1, 0.51, dx)
+            response_spectrum = ResponseSpectra(self.accelerations, self.dt, T)
+            psa = response_spectrum["Acceleration"]
 
-        return cumtrapz(psa, dx=0.01)[-1]
+        else:
+            dx = self.period[2] - self.period[1]
+            index = isclose(self.period, 0.5).nonzero()[0][0] + 1
+            psa = self.response_spectra["Acceleration"][:index]
+
+        return cumtrapz(psa, dx=dx)[-1]
 
     def velocity_spectrum_intensity(self):
-        T = arange(0.1, 2.51, 0.01)
-        response_spectrum = ResponseSpectra(self.accelerations, self.dt, T)
-        psv = response_spectrum["Velocity"]
+        if self.period[-1] < 2.5:
+            dx = 0.1
+            T = arange(0.1, 2.51, dx)
+            response_spectrum = ResponseSpectra(self.accelerations, self.dt, T)
+            psv = response_spectrum["Velocity"]
 
-        return cumtrapz(psv, dx=0.01)[-1]
+        else:
+            dx = self.period[2] - self.period[1]
+            index = isclose(self.period, 2.5).nonzero()[0][0] + 1
+            psv = self.response_spectra["Velocity"][:index]
+
+        return cumtrapz(psv, dx=dx)[-1]
 
     def A95(self):
         def f(accelerations,a95,dt,Ia):
             diff = accelerations**2 - a95**2
             positives = [0 if i<0 else i for i in diff]
             Ia_new = cumtrapz(positives,dx=dt)[-1]
-
             return Ia_new/Ia - 0.05
-        a95 = bisection(0,max(self.accelerations),f,self.accelerations,self.dt,cumtrapz(self.accelerations,dx=self.dt)[-1])
+
+        def bisection(f, accelerations, dt, Ia):
+            x1 = 0
+            x2 = max(abs(accelerations))
+            c = (x1 + x2) / 2
+            while abs(f(accelerations, c, dt, Ia)) > 0.001:
+
+                if f(accelerations, c, dt, Ia) > 0:
+                    x1 = c
+                else:
+                    x2 = c
+                c = (x1 + x2) / 2
+            return c
+
+        a95 = bisection(f,self.accelerations,self.dt,cumtrapz(self.accelerations**2,dx=self.dt)[-1])
         return a95
 
     def predomimant_period(self):
-        T = arange(0.02,4.02,0.02)
-        response_spectrum = ResponseSpectra(self.accelerations, self.dt, T)
-        psa = response_spectrum["Acceleration"]
+        psa = self.response_spectra["Acceleration"]
 
-        return T[where(psa==max(psa))[0][0]]
+        return self.period[where(psa==max(psa))[0][0]]
 
     def mean_period(self):
         f,fa,pa = FourierAmplitude(self.accelerations,self.dt)

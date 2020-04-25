@@ -1,10 +1,10 @@
 from numpy import loadtxt,arange
 from GroundMotionParameters import GMP
 from PreProcess import *
-from Spectra import FourierAmplitude as FA
+from Spectra import *
 from Time_Series import time_series
 from Graphs import graph_creater
-from Cython.AmplitudeSpectra import FourierAmplitude
+
 class SeismoAnalysis:
     def __init__(self,acceleration,dt,user_name,width,height,output_path):
         self.acceleration = acceleration
@@ -31,12 +31,12 @@ class SeismoAnalysis:
         graph_creater(self.output_path,"{}_displacement_time.html".format(self.user_name),self.time, self.displacement, "Zaman(s)", "Yer Değiştirme(cm)",self.width, self.height)
 
     def ResponseSpectrum(self,damping,period):
-        response_spectrum = ResponseSpectra(self.processed_acceleration,self.dt,period,damping)
-        self.spectral_displacement = response_spectrum["Displacement"]
-        self.spectral_acceleration = response_spectrum["Acceleration"]
-        self.spectral_velocity = response_spectrum["Velocity"]
-        self.pseudo_acceleration = response_spectrum["Pseudo-Acceleration"]
-        self.pseudo_velocity = response_spectrum["Pseudo-Velocity"]
+        self.response_spectrum = ResponseSpectra(self.processed_acceleration,self.dt,period,damping)
+        self.spectral_displacement = self.response_spectrum["Displacement"]
+        self.spectral_acceleration = self.response_spectrum["Acceleration"]
+        self.spectral_velocity = self.response_spectrum["Velocity"]
+        self.pseudo_acceleration = self.response_spectrum["Pseudo-Acceleration"]
+        self.pseudo_velocity = self.response_spectrum["Pseudo-Velocity"]
 
         graph_creater(self.output_path,"{}_SpectralAcceleration_period.html".format(self.user_name), period, self.spectral_acceleration, "Periyot(s)", "Spektral İvme(g)", self.width, self.height)
         graph_creater(self.output_path,"{}_SpectralVelocity_period.html".format(self.user_name), period, self.spectral_velocity, "Periyot(s)", "Spektral Hız(cm/s)", self.width, self.height)
@@ -50,7 +50,7 @@ class SeismoAnalysis:
         graph_creater(self.output_path,"{}_PowerSpectra.html".format(self.user_name), self.frequency, self.power_amplitude, "Frekans(Hz)", "Spektral Yoğunluk", self.width, self.height,"log")
 
     def ground_motion_parameters(self):
-        gmp = GMP(self.processed_acceleration,self.velocity,self.displacement,self.dt)
+        gmp = GMP(self.processed_acceleration,self.velocity,self.displacement,self.dt,self.response_spectrum,arange(0.1,10.1,0.1))
         self.pga,self.pga_time = gmp.max_acceleration()
         self.pgv,self.pgv_time = gmp.max_velocity()
         self.pgd,self.pgd_time = gmp.max_displacement()
@@ -66,7 +66,6 @@ class SeismoAnalysis:
         self.housner_intensity = gmp.housner_intensity()
         self.sustained_max_acceleration = gmp.sustained_max_acceleration()
         self.sustained_max_velocity = gmp.sustained_max_velocity()
-        self.effective_design_acceleration = gmp.effective_design_acceleration()
         self.cumulative_absolute_velocity = gmp.cumulative_absolute_velocity()
         self.acceleration_spectrum_intensity = gmp.acceleration_spectrum_intensity()
         self.velocity_spectrum_intensity = gmp.velocity_spectrum_intensity()
@@ -78,11 +77,8 @@ class SeismoAnalysis:
         self.significant_duration = gmp.significant_duration()
         self.effective_duration = gmp.effective_duration(0.48*self.arias_intensity,0.96*self.arias_intensity)
 
-
-
         graph_creater(self.output_path,"{}_AriasIntensity.html".format(self.user_name), self.time, 100*self.arias_intensity_list/self.arias_intensity, "Zaman(s)", "Arias Yoğunluğu(%)", self.width, self.height)
         graph_creater(self.output_path,"{}_EnergyFlux.html".format(self.user_name), self.time, 100*self.specific_energy_density_list/self.spesific_energy_density, "Zaman(s)", "Enerji Akısı(cm2/s)", self.width, self.height)
-
 
 from time import perf_counter
 
@@ -94,19 +90,12 @@ vibration_file = "FieldResults/open trench/oc4.txt"
 accelerations = read_file(vibration_file,1)
 dt = 0.002
 times = arange(0,dt*len(accelerations),dt)
+S = SeismoAnalysis(accelerations,dt,"nubufi",1100,660,"FieldResults")
 t1 = perf_counter()
-"""S = SeismoAnalysis(accelerations,dt,"nubufi",1100,660,"FieldResults")
+S.PreProcess("Butterworth","bandpass",20,50,4,1,True,True)
 S.TimeHistory()
-S.ResponseSpectrum(0.05,arange(1,10.1,0.1))
+S.ResponseSpectrum(0.05,arange(0.01,10.1,0.01))
 S.AmplitudeSpectra()
-S.ground_motion_parameters()"""
-f,fa,pa = FA(accelerations,dt)
-t2 = perf_counter()
-
-print(t2 - t1)
-
-t3 = perf_counter()
-f1,fa1,pa1 = FourierAmplitude(accelerations,dt)
-t4 = perf_counter()
-
-print(t4-t3)
+S.ground_motion_parameters()
+t10 = perf_counter()
+print("Total : ",t10-t1)
